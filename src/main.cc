@@ -28,7 +28,7 @@
 #include <MetalKit/MetalKit.hpp>
 
 class Renderer {
-public:
+ public:
   explicit Renderer(MTL::Device *pDevice) : _pDevice(pDevice->retain()) {
     _pCommandQueue = _pDevice->newCommandQueue();
   }
@@ -50,24 +50,24 @@ public:
     pPool->release();
   }
 
-private:
+ private:
   MTL::Device *_pDevice;
   MTL::CommandQueue *_pCommandQueue;
 };
 
 class MyMTKViewDelegate : public MTK::ViewDelegate {
-public:
+ public:
   explicit MyMTKViewDelegate(MTL::Device *pDevice)
       : MTK::ViewDelegate(), _pRenderer(new Renderer(pDevice)) {}
   ~MyMTKViewDelegate() override { delete _pRenderer; }
   void drawInMTKView(MTK::View *pView) override { _pRenderer->draw(pView); }
 
-private:
+ private:
   Renderer *_pRenderer;
 };
 
 class MyAppDelegate : public NS::ApplicationDelegate {
-public:
+ public:
   ~MyAppDelegate() override {
     _pMtkView->release();
     _pWindow->release();
@@ -113,6 +113,15 @@ public:
     pCloseWindowItem->setKeyEquivalentModifierMask(
         NS::EventModifierFlagCommand);
 
+    SEL fooCb = NS::MenuItem::registerActionCallback(
+        "Foo", [](void *, SEL, const NS::Object *) {
+          std::cout << "Foo" << std::endl;
+        });
+    NS::MenuItem *pFoo = pWindowMenu->addItem(
+        NS::String::string("Foo", UTF8StringEncoding), fooCb,
+        NS::String::string("f", UTF8StringEncoding));
+    pFoo->setKeyEquivalentModifierMask(NS::EventModifierFlagCommand);
+
     pWindowMenuItem->setSubmenu(pWindowMenu);
 
     pMainMenu->addItem(pAppMenuItem);
@@ -126,8 +135,8 @@ public:
     return pMainMenu->autorelease();
   }
 
-  void
-  applicationWillFinishLaunching(NS::Notification *pNotification) override {
+  void applicationWillFinishLaunching(
+      NS::Notification *pNotification) override {
     std::cout << "applicationWillFinishLaunching Start" << std::endl;
     NS::Menu *pMenu = createMenuBar();
     auto *pApp = reinterpret_cast<NS::Application *>(pNotification->object());
@@ -140,9 +149,8 @@ public:
     std::cout << "applicationDidFinishLaunching Start" << std::endl;
     CGRect frame = (CGRect){{100.0, 100.0}, {512.0, 512.0}};
 
-    _pWindow = NS::Window::alloc()->init(
-        frame, NS::WindowStyleMaskBorderless, 
-        NS::BackingStoreBuffered, false);
+    _pWindow = NS::Window::alloc()->init(frame, NS::WindowStyleMaskBorderless,
+                                         NS::BackingStoreBuffered, false);
 
     _pDevice = MTL::CreateSystemDefaultDevice();
 
@@ -171,9 +179,9 @@ public:
     return true;
   }
 
-private:
+ private:
   NS::Window *_pWindow{};
-  
+
   MTK::View *_pMtkView{};
   MTL::Device *_pDevice{};
   MyMTKViewDelegate *_pViewDelegate = nullptr;
