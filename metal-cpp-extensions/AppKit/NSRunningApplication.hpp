@@ -25,27 +25,27 @@
 
 #include <Foundation/NSObject.hpp>
 #include <Foundation/NSPrivate.hpp>
+
 #include "AppKitPrivate.hpp"
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-namespace NS
-{
-	class RunningApplication : NS::Referencing< RunningApplication >
-	{
-		public:
-			static RunningApplication*	currentApplication();
-			String*						localizedName() const;
-	};
+namespace NS {
+class RunningApplication : NS::Referencing<RunningApplication> {
+ public:
+  static RunningApplication* currentApplication();
+  String* localizedName() const;
+};
+}  // namespace NS
+
+_NS_INLINE NS::RunningApplication*
+NS::RunningApplication::currentApplication() {
+  return Object::sendMessage<NS::RunningApplication*>(
+      _APPKIT_PRIVATE_CLS(NSRunningApplication),
+      _APPKIT_PRIVATE_SEL(currentApplication));
 }
 
-
-_NS_INLINE NS::RunningApplication* NS::RunningApplication::currentApplication()
-{
-	return Object::sendMessage< NS::RunningApplication* >( _APPKIT_PRIVATE_CLS( NSRunningApplication ), _APPKIT_PRIVATE_SEL( currentApplication ) );
-}
-
-_NS_INLINE NS::String* NS::RunningApplication::localizedName() const
-{
-	return Object::sendMessage< NS::String* >( this, _APPKIT_PRIVATE_SEL( localizedName ) );
+_NS_INLINE NS::String* NS::RunningApplication::localizedName() const {
+  return Object::sendMessage<NS::String*>(this,
+                                          _APPKIT_PRIVATE_SEL(localizedName));
 }

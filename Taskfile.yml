@@ -1,0 +1,14 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  GREETING: Hello, World!
+
+tasks:
+  compile:
+    cmds:
+      - cmake --build build
+  execute:
+    cmds:
+      - ./build/Metal

@@ -27,6 +27,7 @@ Diagnostics:
       - readability-identifier-length
       - readability-identifier-naming
       - readability-magic-numbers
+      - readability-suspicious-call-argument
 
 InlayHints:
   Enabled: Yes
