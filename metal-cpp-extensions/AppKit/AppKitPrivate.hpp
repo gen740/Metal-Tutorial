@@ -82,60 +82,36 @@ _APPKIT_PRIVATE_DEF_CLS(NSWindow);
 namespace NS::Private::Selector {
 
 _APPKIT_PRIVATE_DEF_SEL(addItem_, "addItem:");
-
 _APPKIT_PRIVATE_DEF_SEL(addItemWithTitle_action_keyEquivalent_,
                         "addItemWithTitle:action:keyEquivalent:");
-
 _APPKIT_PRIVATE_DEF_SEL(applicationDidFinishLaunching_,
                         "applicationDidFinishLaunching:");
-
 _APPKIT_PRIVATE_DEF_SEL(applicationShouldTerminateAfterLastWindowClosed_,
                         "applicationShouldTerminateAfterLastWindowClosed:");
-
 _APPKIT_PRIVATE_DEF_SEL(applicationWillFinishLaunching_,
                         "applicationWillFinishLaunching:");
-
 _APPKIT_PRIVATE_DEF_SEL(close, "close");
-
 _APPKIT_PRIVATE_DEF_SEL(currentApplication, "currentApplication");
-
 _APPKIT_PRIVATE_DEF_SEL(keyEquivalentModifierMask, "keyEquivalentModifierMask");
-
 _APPKIT_PRIVATE_DEF_SEL(localizedName, "localizedName");
-
 _APPKIT_PRIVATE_DEF_SEL(sharedApplication, "sharedApplication");
-
 _APPKIT_PRIVATE_DEF_SEL(setDelegate_, "setDelegate:");
-
 _APPKIT_PRIVATE_DEF_SEL(setActivationPolicy_, "setActivationPolicy:");
-
 _APPKIT_PRIVATE_DEF_SEL(activateIgnoringOtherApps_,
                         "activateIgnoringOtherApps:");
-
 _APPKIT_PRIVATE_DEF_SEL(run, "run");
-
 _APPKIT_PRIVATE_DEF_SEL(terminate_, "terminate:");
-
 _APPKIT_PRIVATE_DEF_SEL(initWithContentRect_styleMask_backing_defer_,
                         "initWithContentRect:styleMask:backing:defer:");
-
 _APPKIT_PRIVATE_DEF_SEL(initWithFrame_, "initWithFrame:");
-
 _APPKIT_PRIVATE_DEF_SEL(initWithTitle_, "initWithTitle:");
-
 _APPKIT_PRIVATE_DEF_SEL(setContentView_, "setContentView:");
-
 _APPKIT_PRIVATE_DEF_SEL(makeKeyAndOrderFront_, "makeKeyAndOrderFront:");
-
 _APPKIT_PRIVATE_DEF_SEL(setKeyEquivalentModifierMask_,
                         "setKeyEquivalentModifierMask:");
-
 _APPKIT_PRIVATE_DEF_SEL(setMainMenu_, "setMainMenu:");
-
 _APPKIT_PRIVATE_DEF_SEL(setSubmenu_, "setSubmenu:");
-
 _APPKIT_PRIVATE_DEF_SEL(setTitle_, "setTitle:");
-
 _APPKIT_PRIVATE_DEF_SEL(windows, "windows");
 
 }  // namespace NS::Private::Selector
