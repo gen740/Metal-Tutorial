@@ -1,6 +1,5 @@
 #include <array>
 #include <cassert>
-#include <cstddef>
 #include <iostream>
 #include <vector>
 
@@ -13,8 +12,13 @@
 #include <AppKit/AppKit.hpp>
 #include <Metal/Metal.hpp>
 #include <MetalKit/MetalKit.hpp>
+#include <cstddef>
 
-static constexpr size_t kNumInstances = 32;
+static constexpr size_t kInstanceRows = 10;
+static constexpr size_t kInstanceColumns = 10;
+static constexpr size_t kInstanceDepth = 10;
+static constexpr size_t kNumInstances =
+    (kInstanceRows * kInstanceColumns * kInstanceDepth);
 static constexpr size_t kMaxFramesInFlight = 3;
 
 namespace math {
@@ -26,6 +30,7 @@ simd::float4x4 makeYRotate(float angleRadians);
 simd::float4x4 makeZRotate(float angleRadians);
 simd::float4x4 makeTranslate(const simd::float3& v);
 simd::float4x4 makeScale(const simd::float3& v);
+simd::float3x3 discardTranslation(const simd::float4x4& m);
 }  // namespace math
 
 class Renderer {
@@ -40,13 +45,13 @@ class Renderer {
  private:
   MTL::Device* _pDevice;
   MTL::CommandQueue* _pCommandQueue;
-  MTL::Library* _pShaderLibrary{};
-  MTL::RenderPipelineState* _pPSO{};
-  MTL::DepthStencilState* _pDepthStencilState{};
-  MTL::Buffer* _pVertexDataBuffer{};
-  std::array<MTL::Buffer*, kMaxFramesInFlight> _pInstanceDataBuffer{};
-  std::array<MTL::Buffer*, kMaxFramesInFlight> _pCameraDataBuffer{};
-  MTL::Buffer* _pIndexBuffer{};
+  MTL::Library* _pShaderLibrary;
+  MTL::RenderPipelineState* _pPSO;
+  MTL::DepthStencilState* _pDepthStencilState;
+  MTL::Buffer* _pVertexDataBuffer;
+  MTL::Buffer* _pInstanceDataBuffer[kMaxFramesInFlight];
+  MTL::Buffer* _pCameraDataBuffer[kMaxFramesInFlight];
+  MTL::Buffer* _pIndexBuffer;
   float _angle{};
   int _frame{};
   dispatch_semaphore_t _semaphore;
@@ -65,23 +70,25 @@ class MyMTKViewDelegate : public MTK::ViewDelegate {
 
 class MyAppDelegate : public NS::ApplicationDelegate {
  public:
-  ~MyAppDelegate() override;
+  ~MyAppDelegate();
 
-  static NS::Menu* createMenuBar();
+  NS::Menu* createMenuBar();
 
-  void applicationWillFinishLaunching(NS::Notification* pNotification) override;
-  void applicationDidFinishLaunching(NS::Notification* pNotification) override;
-  bool applicationShouldTerminateAfterLastWindowClosed(
+  virtual void applicationWillFinishLaunching(
+      NS::Notification* pNotification) override;
+  virtual void applicationDidFinishLaunching(
+      NS::Notification* pNotification) override;
+  virtual bool applicationShouldTerminateAfterLastWindowClosed(
       NS::Application* pSender) override;
 
  private:
-  NS::Window* _pWindow{};
-  MTK::View* _pMtkView{};
-  MTL::Device* _pDevice{};
+  NS::Window* _pWindow;
+  MTK::View* _pMtkView;
+  MTL::Device* _pDevice;
   MyMTKViewDelegate* _pViewDelegate = nullptr;
 };
 
-int main() {
+int main(int argc, char* argv[]) {
   NS::AutoreleasePool* pAutoreleasePool = NS::AutoreleasePool::alloc()->init();
 
   MyAppDelegate del;
@@ -116,7 +123,7 @@ NS::Menu* MyAppDelegate::createMenuBar() {
                                  ->stringByAppendingString(appName);
   SEL quitCb = NS::MenuItem::registerActionCallback(
       "appQuit", [](void*, SEL, const NS::Object* pSender) {
-        auto* pApp = NS::Application::sharedApplication();
+        auto pApp = NS::Application::sharedApplication();
         pApp->terminate(pSender);
       });
 
@@ -131,7 +138,7 @@ NS::Menu* MyAppDelegate::createMenuBar() {
 
   SEL closeWindowCb = NS::MenuItem::registerActionCallback(
       "windowClose", [](void*, SEL, const NS::Object*) {
-        auto* pApp = NS::Application::sharedApplication();
+        auto pApp = NS::Application::sharedApplication();
         pApp->windows()->object<NS::Window>(0)->close();
       });
   NS::MenuItem* pCloseWindowItem = pWindowMenu->addItem(
@@ -155,14 +162,15 @@ NS::Menu* MyAppDelegate::createMenuBar() {
 void MyAppDelegate::applicationWillFinishLaunching(
     NS::Notification* pNotification) {
   NS::Menu* pMenu = createMenuBar();
-  auto* pApp = reinterpret_cast<NS::Application*>(pNotification->object());
+  NS::Application* pApp =
+      reinterpret_cast<NS::Application*>(pNotification->object());
   pApp->setMainMenu(pMenu);
   pApp->setActivationPolicy(NS::ActivationPolicy::ActivationPolicyRegular);
 }
 
 void MyAppDelegate::applicationDidFinishLaunching(
     NS::Notification* pNotification) {
-  CGRect frame = (CGRect){{100.0, 100.0}, {512.0, 512.0}};
+  CGRect frame = (CGRect){{100.0, 100.0}, {1024.0, 1024.0}};
 
   _pWindow = NS::Window::alloc()->init(
       frame, NS::WindowStyleMaskClosable | NS::WindowStyleMaskTitled,
@@ -175,23 +183,24 @@ void MyAppDelegate::applicationDidFinishLaunching(
   _pMtkView->setClearColor(MTL::ClearColor::Make(0.1, 0.1, 0.1, 1.0));
   _pMtkView->setDepthStencilPixelFormat(
       MTL::PixelFormat::PixelFormatDepth16Unorm);
-  _pMtkView->setClearDepth(1.0F);
+  _pMtkView->setClearDepth(1.0f);
 
   _pViewDelegate = new MyMTKViewDelegate(_pDevice);
   _pMtkView->setDelegate(_pViewDelegate);
 
   _pWindow->setContentView(_pMtkView);
   _pWindow->setTitle(NS::String::string(
-      "05 - Perspective", NS::StringEncoding::UTF8StringEncoding));
+      "06 - Lighting", NS::StringEncoding::UTF8StringEncoding));
 
   _pWindow->makeKeyAndOrderFront(nullptr);
 
-  auto* pApp = reinterpret_cast<NS::Application*>(pNotification->object());
+  NS::Application* pApp =
+      reinterpret_cast<NS::Application*>(pNotification->object());
   pApp->activateIgnoringOtherApps(true);
 }
 
 bool MyAppDelegate::applicationShouldTerminateAfterLastWindowClosed(
-    [[maybe_unused]] NS::Application* pSender) {
+    NS::Application* pSender) {
   return true;
 }
 
@@ -212,54 +221,54 @@ constexpr simd::float3 add(const simd::float3& a, const simd::float3& b) {
 constexpr simd_float4x4 makeIdentity() {
   using simd::float4;
   return (simd_float4x4){
-      (float4){1.F, 0.F, 0.F, 0.F}, (float4){0.F, 1.F, 0.F, 0.F},
-      (float4){0.F, 0.F, 1.F, 0.F}, (float4){0.F, 0.F, 0.F, 1.F}};
+      (float4){1.f, 0.f, 0.f, 0.f}, (float4){0.f, 1.f, 0.f, 0.f},
+      (float4){0.f, 0.f, 1.f, 0.f}, (float4){0.f, 0.f, 0.f, 1.f}};
 }
 
 simd::float4x4 makePerspective(float fovRadians, float aspect, float znear,
                                float zfar) {
   using simd::float4;
-  float ys = 1.F / tanf(fovRadians * 0.5F);
+  float ys = 1.f / tanf(fovRadians * 0.5f);
   float xs = ys / aspect;
   float zs = zfar / (znear - zfar);
   return simd_matrix_from_rows(
-      (float4){xs, 0.0F, 0.0F, 0.0F}, (float4){0.0F, ys, 0.0F, 0.0F},
-      (float4){0.0F, 0.0F, zs, znear * zs}, (float4){0, 0, -1, 0});
+      (float4){xs, 0.0f, 0.0f, 0.0f}, (float4){0.0f, ys, 0.0f, 0.0f},
+      (float4){0.0f, 0.0f, zs, znear * zs}, (float4){0, 0, -1, 0});
 }
 
 simd::float4x4 makeXRotate(float angleRadians) {
   using simd::float4;
   const float a = angleRadians;
-  return simd_matrix_from_rows((float4){1.0F, 0.0F, 0.0F, 0.0F},
-                               (float4){0.0F, cosf(a), sinf(a), 0.0F},
-                               (float4){0.0F, -sinf(a), cosf(a), 0.0F},
-                               (float4){0.0F, 0.0F, 0.0F, 1.0F});
+  return simd_matrix_from_rows((float4){1.0f, 0.0f, 0.0f, 0.0f},
+                               (float4){0.0f, cosf(a), sinf(a), 0.0f},
+                               (float4){0.0f, -sinf(a), cosf(a), 0.0f},
+                               (float4){0.0f, 0.0f, 0.0f, 1.0f});
 }
 
 simd::float4x4 makeYRotate(float angleRadians) {
   using simd::float4;
   const float a = angleRadians;
-  return simd_matrix_from_rows((float4){cosf(a), 0.0F, sinf(a), 0.0F},
-                               (float4){0.0F, 1.0F, 0.0F, 0.0F},
-                               (float4){-sinf(a), 0.0F, cosf(a), 0.0F},
-                               (float4){0.0F, 0.0F, 0.0F, 1.0F});
+  return simd_matrix_from_rows((float4){cosf(a), 0.0f, sinf(a), 0.0f},
+                               (float4){0.0f, 1.0f, 0.0f, 0.0f},
+                               (float4){-sinf(a), 0.0f, cosf(a), 0.0f},
+                               (float4){0.0f, 0.0f, 0.0f, 1.0f});
 }
 
 simd::float4x4 makeZRotate(float angleRadians) {
   using simd::float4;
   const float a = angleRadians;
-  return simd_matrix_from_rows((float4){cosf(a), sinf(a), 0.0F, 0.0F},
-                               (float4){-sinf(a), cosf(a), 0.0F, 0.0F},
-                               (float4){0.0F, 0.0F, 1.0F, 0.0F},
-                               (float4){0.0F, 0.0F, 0.0F, 1.0F});
+  return simd_matrix_from_rows((float4){cosf(a), sinf(a), 0.0f, 0.0f},
+                               (float4){-sinf(a), cosf(a), 0.0f, 0.0f},
+                               (float4){0.0f, 0.0f, 1.0f, 0.0f},
+                               (float4){0.0f, 0.0f, 0.0f, 1.0f});
 }
 
 simd::float4x4 makeTranslate(const simd::float3& v) {
   using simd::float4;
-  const float4 col0 = {1.0F, 0.0F, 0.0F, 0.0F};
-  const float4 col1 = {0.0F, 1.0F, 0.0F, 0.0F};
-  const float4 col2 = {0.0F, 0.0F, 1.0F, 0.0F};
-  const float4 col3 = {v.x, v.y, v.z, 1.0F};
+  const float4 col0 = {1.0f, 0.0f, 0.0f, 0.0f};
+  const float4 col1 = {0.0f, 1.0f, 0.0f, 0.0f};
+  const float4 col2 = {0.0f, 0.0f, 1.0f, 0.0f};
+  const float4 col3 = {v.x, v.y, v.z, 1.0f};
   return simd_matrix(col0, col1, col2, col3);
 }
 
@@ -269,11 +278,16 @@ simd::float4x4 makeScale(const simd::float3& v) {
                      (float4){0, 0, v.z, 0}, (float4){0, 0, 0, 1.0});
 }
 
+simd::float3x3 discardTranslation(const simd::float4x4& m) {
+  return simd_matrix(m.columns[0].xyz, m.columns[1].xyz, m.columns[2].xyz);
+}
+
 }  // namespace math
 
 const int Renderer::kMaxFramesInFlight = 3;
 
-Renderer::Renderer(MTL::Device* pDevice) : _pDevice(pDevice->retain()) {
+Renderer::Renderer(MTL::Device* pDevice)
+    : _pDevice(pDevice->retain()), _angle(0.f), _frame(0) {
   _pCommandQueue = _pDevice->newCommandQueue();
   buildShaders();
   buildDepthStencilStates();
@@ -299,14 +313,21 @@ Renderer::~Renderer() {
 }
 
 namespace shader_types {
+struct VertexData {
+  simd::float3 position;
+  simd::float3 normal;
+};
+
 struct InstanceData {
   simd::float4x4 instanceTransform;
-  simd::float4 instanceColor{};
+  simd::float3x3 instanceNormalTransform;
+  simd::float4 instanceColor;
 };
 
 struct CameraData {
   simd::float4x4 perspectiveTransform;
   simd::float4x4 worldTransform;
+  simd::float3x3 worldNormalTransform;
 };
 }  // namespace shader_types
 
@@ -320,17 +341,20 @@ void Renderer::buildShaders() {
         struct v2f
         {
             float4 position [[position]];
+            float3 normal;
             half3 color;
         };
 
         struct VertexData
         {
             float3 position;
+            float3 normal;
         };
 
         struct InstanceData
         {
             float4x4 instanceTransform;
+            float3x3 instanceNormalTransform;
             float4 instanceColor;
         };
 
@@ -338,6 +362,7 @@ void Renderer::buildShaders() {
         {
             float4x4 perspectiveTransform;
             float4x4 worldTransform;
+            float3x3 worldNormalTransform;
         };
 
         v2f vertex vertexMain( device const VertexData* vertexData [[buffer(0)]],
@@ -347,25 +372,37 @@ void Renderer::buildShaders() {
                                uint instanceId [[instance_id]] )
         {
             v2f o;
-            float4 pos = float4( vertexData[ vertexId ].position, 1.0 );
+
+            const device VertexData& vd = vertexData[ vertexId ];
+            float4 pos = float4( vd.position, 1.0 );
             pos = instanceData[ instanceId ].instanceTransform * pos;
             pos = cameraData.perspectiveTransform * cameraData.worldTransform * pos;
             o.position = pos;
+
+            float3 normal = instanceData[ instanceId ].instanceNormalTransform * vd.normal;
+            normal = cameraData.worldNormalTransform * normal;
+            o.normal = normal;
+
             o.color = half3( instanceData[ instanceId ].instanceColor.rgb );
             return o;
         }
 
         half4 fragment fragmentMain( v2f in [[stage_in]] )
         {
-            return half4( in.color, 1.0 );
+            // assume light coming from (front-top-right)
+            float3 l = normalize(float3( 1.0, 1.0, 0.8 ));
+            float3 n = normalize( in.normal );
+
+            float ndotl = saturate( dot( n, l ) );
+            return half4( in.color * 0.1 + in.color * ndotl, 1.0 );
         }
     )";
 
   NS::Error* pError = nullptr;
   MTL::Library* pLibrary = _pDevice->newLibrary(
       NS::String::string(shaderSrc, UTF8StringEncoding), nullptr, &pError);
-  if (pLibrary == nullptr) {
-    std::cerr << pError->localizedDescription()->utf8String() << std::endl;
+  if (!pLibrary) {
+    __builtin_printf("%s", pError->localizedDescription()->utf8String());
     assert(false);
   }
 
@@ -384,8 +421,8 @@ void Renderer::buildShaders() {
       MTL::PixelFormat::PixelFormatDepth16Unorm);
 
   _pPSO = _pDevice->newRenderPipelineState(pDesc, &pError);
-  if (_pPSO == nullptr) {
-    std::cerr << pError->localizedDescription()->utf8String() << std::endl;
+  if (!_pPSO) {
+    __builtin_printf("%s", pError->localizedDescription()->utf8String());
     assert(false);
   }
 
@@ -408,34 +445,40 @@ void Renderer::buildDepthStencilStates() {
 
 void Renderer::buildBuffers() {
   using simd::float3;
-  const float s = 0.5F;
+  const float s = 0.5f;
 
-  std::vector<float3> verts = {float3{-s, -s, +s}, float3{+s, -s, +s},
-                               float3{+s, +s, +s}, float3{-s, +s, +s},
+  shader_types::VertexData verts[] = {
+      //   Positions          Normals
+      {{-s, -s, +s}, {0.f, 0.f, 1.f}},  {{+s, -s, +s}, {0.f, 0.f, 1.f}},
+      {{+s, +s, +s}, {0.f, 0.f, 1.f}},  {{-s, +s, +s}, {0.f, 0.f, 1.f}},
 
-                               float3{-s, -s, -s}, float3{-s, +s, -s},
-                               float3{+s, +s, -s}, float3{+s, -s, -s}};
+      {{+s, -s, +s}, {1.f, 0.f, 0.f}},  {{+s, -s, -s}, {1.f, 0.f, 0.f}},
+      {{+s, +s, -s}, {1.f, 0.f, 0.f}},  {{+s, +s, +s}, {1.f, 0.f, 0.f}},
 
-  std::vector<uint16_t> indices = {0, 1, 2, /* front */
-                                   2, 3, 0,
+      {{+s, -s, -s}, {0.f, 0.f, -1.f}}, {{-s, -s, -s}, {0.f, 0.f, -1.f}},
+      {{-s, +s, -s}, {0.f, 0.f, -1.f}}, {{+s, +s, -s}, {0.f, 0.f, -1.f}},
 
-                                   1, 7, 6, /* right */
-                                   6, 2, 1,
+      {{-s, -s, -s}, {-1.f, 0.f, 0.f}}, {{-s, -s, +s}, {-1.f, 0.f, 0.f}},
+      {{-s, +s, +s}, {-1.f, 0.f, 0.f}}, {{-s, +s, -s}, {-1.f, 0.f, 0.f}},
 
-                                   7, 4, 5, /* back */
-                                   5, 6, 7,
+      {{-s, +s, +s}, {0.f, 1.f, 0.f}},  {{+s, +s, +s}, {0.f, 1.f, 0.f}},
+      {{+s, +s, -s}, {0.f, 1.f, 0.f}},  {{-s, +s, -s}, {0.f, 1.f, 0.f}},
 
-                                   4, 0, 3, /* left */
-                                   3, 5, 4,
+      {{-s, -s, -s}, {0.f, -1.f, 0.f}}, {{+s, -s, -s}, {0.f, -1.f, 0.f}},
+      {{+s, -s, +s}, {0.f, -1.f, 0.f}}, {{-s, -s, +s}, {0.f, -1.f, 0.f}},
+  };
 
-                                   3, 2, 6, /* top */
-                                   6, 5, 3,
+  uint16_t indices[] = {
+      0,  1,  2,  2,  3,  0,  /* front */
+      4,  5,  6,  6,  7,  4,  /* right */
+      8,  9,  10, 10, 11, 8,  /* back */
+      12, 13, 14, 14, 15, 12, /* left */
+      16, 17, 18, 18, 19, 16, /* top */
+      20, 21, 22, 22, 23, 20, /* bottom */
+  };
 
-                                   4, 7, 1, /* bottom */
-                                   1, 0, 4};
-
-  const size_t vertexDataSize = verts.size() * sizeof(float3);
-  const size_t indexDataSize = indices.size() * sizeof(float3);
+  const size_t vertexDataSize = sizeof(verts);
+  const size_t indexDataSize = sizeof(indices);
 
   MTL::Buffer* pVertexBuffer =
       _pDevice->newBuffer(vertexDataSize, MTL::ResourceStorageModeManaged);
@@ -445,8 +488,8 @@ void Renderer::buildBuffers() {
   _pVertexDataBuffer = pVertexBuffer;
   _pIndexBuffer = pIndexBuffer;
 
-  memcpy(_pVertexDataBuffer->contents(), verts.data(), vertexDataSize);
-  memcpy(_pIndexBuffer->contents(), indices.data(), indexDataSize);
+  memcpy(_pVertexDataBuffer->contents(), verts, vertexDataSize);
+  memcpy(_pIndexBuffer->contents(), indices, indexDataSize);
 
   _pVertexDataBuffer->didModifyRange(
       NS::Range::Make(0, _pVertexDataBuffer->length()));
@@ -480,45 +523,63 @@ void Renderer::draw(MTK::View* pView) {
   MTL::CommandBuffer* pCmd = _pCommandQueue->commandBuffer();
   dispatch_semaphore_wait(_semaphore, DISPATCH_TIME_FOREVER);
   Renderer* pRenderer = this;
-  pCmd->addCompletedHandler([=](MTL::CommandBuffer*) {
+  pCmd->addCompletedHandler(^void(MTL::CommandBuffer* pCmd) {
     dispatch_semaphore_signal(pRenderer->_semaphore);
   });
 
-  _angle += 0.01F;
-
-  const float scl = 0.1F;
-  auto* pInstanceData = reinterpret_cast<shader_types::InstanceData*>(
-      pInstanceDataBuffer->contents());
-
-  float3 objectPosition = {0.F, 0.F, -5.F};
+  _angle += 0.002f;
 
   // Update instance positions:
 
+  const float scl = 0.2f;
+  shader_types::InstanceData* pInstanceData =
+      reinterpret_cast<shader_types::InstanceData*>(
+          pInstanceDataBuffer->contents());
+
+  float3 objectPosition = {0.f, 0.f, -10.f};
+
   float4x4 rt = math::makeTranslate(objectPosition);
-  float4x4 rr = math::makeYRotate(-_angle);
+  float4x4 rr1 = math::makeYRotate(-_angle);
+  float4x4 rr0 = math::makeXRotate(_angle * 0.5);
   float4x4 rtInv = math::makeTranslate(
       {-objectPosition.x, -objectPosition.y, -objectPosition.z});
-  float4x4 fullObjectRot = rt * rr * rtInv;
+  float4x4 fullObjectRot = rt * rr1 * rr0 * rtInv;
 
+  size_t ix = 0;
+  size_t iy = 0;
+  size_t iz = 0;
   for (size_t i = 0; i < kNumInstances; ++i) {
-    float iDivNumInstances = i / static_cast<float>(kNumInstances);
-    float xoff = (iDivNumInstances * 2.0F - 1.0F) + (1.F / kNumInstances);
-    float yoff = sin((iDivNumInstances + _angle) * 2.0F * M_PI);
+    if (ix == kInstanceRows) {
+      ix = 0;
+      iy += 1;
+    }
+    if (iy == kInstanceRows) {
+      iy = 0;
+      iz += 1;
+    }
 
-    // Use the tiny math library to apply a 3D transformation to the instance.
     float4x4 scale = math::makeScale((float3){scl, scl, scl});
-    float4x4 zrot = math::makeZRotate(_angle);
-    float4x4 yrot = math::makeYRotate(_angle);
+    float4x4 zrot = math::makeZRotate(_angle * sinf((float)ix));
+    float4x4 yrot = math::makeYRotate(_angle * cosf((float)iy));
+
+    float x = ((float)ix - (float)kInstanceRows / 2.f) * (2.f * scl) + scl;
+    float y = ((float)iy - (float)kInstanceColumns / 2.f) * (2.f * scl) + scl;
+    float z = ((float)iz - (float)kInstanceDepth / 2.f) * (2.f * scl);
     float4x4 translate =
-        math::makeTranslate(math::add(objectPosition, {xoff, yoff, 0.F}));
+        math::makeTranslate(math::add(objectPosition, {x, y, z}));
 
     pInstanceData[i].instanceTransform =
         fullObjectRot * translate * yrot * zrot * scale;
+    pInstanceData[i].instanceNormalTransform =
+        math::discardTranslation(pInstanceData[i].instanceTransform);
 
+    float iDivNumInstances = i / (float)kNumInstances;
     float r = iDivNumInstances;
-    float g = 1.0F - r;
-    float b = sinf(M_PI * 2.0F * iDivNumInstances);
-    pInstanceData[i].instanceColor = (float4){r, g, b, 1.0F};
+    float g = 1.0f - r;
+    float b = sinf(M_PI * 2.0f * iDivNumInstances);
+    pInstanceData[i].instanceColor = (float4){r, g, b, 1.0f};
+
+    ix += 1;
   }
   pInstanceDataBuffer->didModifyRange(
       NS::Range::Make(0, pInstanceDataBuffer->length()));
@@ -531,6 +592,8 @@ void Renderer::draw(MTK::View* pView) {
   pCameraData->perspectiveTransform =
       math::makePerspective(45.F * M_PI / 180.F, 1.F, 0.03F, 500.0F);
   pCameraData->worldTransform = math::makeIdentity();
+  pCameraData->worldNormalTransform =
+      math::discardTranslation(pCameraData->worldTransform);
   pCameraDataBuffer->didModifyRange(
       NS::Range::Make(0, sizeof(shader_types::CameraData)));
 
