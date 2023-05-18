@@ -5,10 +5,12 @@
 #define MTK_PRIVATE_IMPLEMENTATION
 #define CA_PRIVATE_IMPLEMENTATION
 #include <simd/simd.h>
+#include <time.h>
 
 #include <AppKit/AppKit.hpp>
 #include <Metal/Metal.hpp>
 #include <MetalKit/MetalKit.hpp>
+#include <chrono>
 
 static constexpr size_t kInstanceRows = 10;
 static constexpr size_t kInstanceColumns = 10;
@@ -18,8 +20,13 @@ static constexpr size_t kNumInstances =
 static constexpr size_t kMaxFramesInFlight = 3;
 static constexpr uint32_t kTextureWidth = 128;
 static constexpr uint32_t kTextureHeight = 128;
+static constexpr double kAutoCaptureTimeoutSecs =
+    std::chrono::seconds(3).count();
 
-#pragma region Declarations {
+auto start = std::chrono::system_clock::now();
+
+extern "C" NS::String* NSTemporaryDirectory(void);
+
 namespace math {
 constexpr simd::float3 add(const simd::float3& a, const simd::float3& b);
 constexpr simd_float4x4 makeIdentity();
@@ -43,6 +50,8 @@ class Renderer {
   void buildBuffers();
   void generateMandelbrotTexture(MTL::CommandBuffer* pCommandBuffer);
   void draw(MTK::View* pView);
+  void triggerCapture();
+  static bool beginCapture;
 
  private:
   MTL::Device* _pDevice;
@@ -62,6 +71,8 @@ class Renderer {
   dispatch_semaphore_t _semaphore;
   static const int kMaxFramesInFlight;
   uint _animationIndex;
+  bool _hasCaptured;
+  NS::String* _pTraceSaveFilePath;
 };
 
 class MyMTKViewDelegate : public MTK::ViewDelegate {
@@ -94,8 +105,6 @@ class MyAppDelegate : public NS::ApplicationDelegate {
   MyMTKViewDelegate* _pViewDelegate = nullptr;
 };
 
-#pragma endregion Declarations }
-
 int main(int argc, char* argv[]) {
   NS::AutoreleasePool* pAutoreleasePool = NS::AutoreleasePool::alloc()->init();
 
@@ -110,8 +119,6 @@ int main(int argc, char* argv[]) {
   return 0;
 }
 
-#pragma mark - AppDelegate
-#pragma region AppDelegate {
 MyAppDelegate::~MyAppDelegate() {
   _pMtkView->release();
   _pWindow->release();
@@ -158,13 +165,32 @@ NS::Menu* MyAppDelegate::createMenuBar() {
 
   pWindowMenuItem->setSubmenu(pWindowMenu);
 
+  // Capture Menu UI
+  NS::MenuItem* pCaptureMenuItem = NS::MenuItem::alloc()->init();
+  NS::Menu* pCaptureMenu = NS::Menu::alloc()->init(
+      NS::String::string("Capture", UTF8StringEncoding));
+
+  SEL beginCaptureCb = NS::MenuItem::registerActionCallback(
+      "beginCapture",
+      [](void*, SEL, const NS::Object*) { Renderer::beginCapture = true; });
+
+  NS::MenuItem* pBeginCaptureItem = pCaptureMenu->addItem(
+      NS::String::string("Begin Capture", UTF8StringEncoding), beginCaptureCb,
+      NS::String::string("c", UTF8StringEncoding));
+  pBeginCaptureItem->setKeyEquivalentModifierMask(NS::EventModifierFlagCommand);
+
+  pCaptureMenuItem->setSubmenu(pCaptureMenu);
+
   pMainMenu->addItem(pAppMenuItem);
   pMainMenu->addItem(pWindowMenuItem);
+  pMainMenu->addItem(pCaptureMenuItem);
 
   pAppMenuItem->release();
   pWindowMenuItem->release();
+  pCaptureMenuItem->release();
   pAppMenu->release();
   pWindowMenu->release();
+  pCaptureMenu->release();
 
   return pMainMenu->autorelease();
 }
@@ -200,7 +226,7 @@ void MyAppDelegate::applicationDidFinishLaunching(
 
   _pWindow->setContentView(_pMtkView);
   _pWindow->setTitle(NS::String::string(
-      "09 - Compute to Render", NS::StringEncoding::UTF8StringEncoding));
+      "10 - Programmatic GPU Capture", NS::StringEncoding::UTF8StringEncoding));
 
   _pWindow->makeKeyAndOrderFront(nullptr);
 
@@ -214,10 +240,6 @@ bool MyAppDelegate::applicationShouldTerminateAfterLastWindowClosed(
   return true;
 }
 
-#pragma endregion AppDelegate }
-
-#pragma mark - ViewDelegate
-#pragma region ViewDelegate {
 MyMTKViewDelegate::MyMTKViewDelegate(MTL::Device* pDevice)
     : MTK::ViewDelegate(), _pRenderer(new Renderer(pDevice)) {}
 
@@ -226,10 +248,6 @@ MyMTKViewDelegate::~MyMTKViewDelegate() { delete _pRenderer; }
 void MyMTKViewDelegate::drawInMTKView(MTK::View* pView) {
   _pRenderer->draw(pView);
 }
-
-#pragma endregion ViewDelegate }
-
-#pragma mark - Math
 
 namespace math {
 constexpr simd::float3 add(const simd::float3& a, const simd::float3& b) {
@@ -302,12 +320,15 @@ simd::float3x3 discardTranslation(const simd::float4x4& m) {
 
 }  // namespace math
 
-#pragma mark - Renderer
-#pragma region Renderer {
 const int Renderer::kMaxFramesInFlight = 3;
+bool Renderer::beginCapture{false};
 
 Renderer::Renderer(MTL::Device* pDevice)
-    : _pDevice(pDevice->retain()), _angle(0.f), _frame(0), _animationIndex(0) {
+    : _pDevice(pDevice->retain()),
+      _angle(0.f),
+      _frame(0),
+      _animationIndex(0),
+      _hasCaptured(false) {
   _pCommandQueue = _pDevice->newCommandQueue();
   buildShaders();
   buildComputePipeline();
@@ -646,6 +667,49 @@ void Renderer::buildBuffers() {
       _pDevice->newBuffer(sizeof(uint), MTL::ResourceStorageModeManaged);
 }
 
+void Renderer::triggerCapture() {
+  bool success;
+
+  MTL::CaptureManager* pCaptureManager =
+      MTL::CaptureManager::sharedCaptureManager();
+  success = pCaptureManager->supportsDestination(
+      MTL::CaptureDestinationGPUTraceDocument);
+  if (!success) {
+    __builtin_printf("Capture support is not enabled\n");
+    assert(false);
+  }
+
+  char filename[NAME_MAX];
+  std::time_t now;
+  std::time(&now);
+  std::strftime(filename, NAME_MAX, "capture-%H-%M-%S_%m-%d-%y.gputrace",
+                std::localtime(&now));
+
+  _pTraceSaveFilePath = NSTemporaryDirectory()->stringByAppendingString(
+      NS::String::string(filename, NS::UTF8StringEncoding));
+  NS::URL* pURL = NS::URL::alloc()->initFileURLWithPath(_pTraceSaveFilePath);
+
+  MTL::CaptureDescriptor* pCaptureDescriptor =
+      MTL::CaptureDescriptor::alloc()->init();
+
+  pCaptureDescriptor->setDestination(MTL::CaptureDestinationGPUTraceDocument);
+  pCaptureDescriptor->setOutputURL(pURL);
+  pCaptureDescriptor->setCaptureObject(_pDevice);
+
+  NS::Error* pError = nullptr;
+
+  success = pCaptureManager->startCapture(pCaptureDescriptor, &pError);
+  if (!success) {
+    __builtin_printf("Failed to start capture: \"%s\" for file \"%s\"\n",
+                     pError->localizedDescription()->utf8String(),
+                     _pTraceSaveFilePath->utf8String());
+    assert(false);
+  }
+
+  pURL->release();
+  pCaptureDescriptor->release();
+}
+
 void Renderer::generateMandelbrotTexture(MTL::CommandBuffer* pCommandBuffer) {
   assert(pCommandBuffer);
 
@@ -676,6 +740,10 @@ void Renderer::draw(MTK::View* pView) {
   using simd::float4x4;
 
   NS::AutoreleasePool* pPool = NS::AutoreleasePool::alloc()->init();
+
+  if (Renderer::beginCapture) {
+    triggerCapture();
+  }
 
   _frame = (_frame + 1) % Renderer::kMaxFramesInFlight;
   MTL::Buffer* pInstanceDataBuffer = _pInstanceDataBuffer[_frame];
@@ -785,7 +853,29 @@ void Renderer::draw(MTK::View* pView) {
   pCmd->presentDrawable(pView->currentDrawable());
   pCmd->commit();
 
+  if (Renderer::beginCapture) {
+    MTL::CaptureManager* pCaptureManager =
+        MTL::CaptureManager::sharedCaptureManager();
+    pCaptureManager->stopCapture();
+
+    NS::String* pOpenCmd =
+        NS::MakeConstantString("open ")->stringByAppendingString(
+            _pTraceSaveFilePath);
+    system(pOpenCmd->utf8String());
+
+    Renderer::beginCapture = false;
+    _hasCaptured = true;
+  }
+
+  // Automattically trigger a capture if person has not used UI to trigger one.
+  if (!_hasCaptured) {
+    auto end = std::chrono::system_clock::now();
+    auto diff = std::chrono::duration_cast<std::chrono::seconds>(end - start);
+
+    if (diff.count() > kAutoCaptureTimeoutSecs) {
+      Renderer::beginCapture = true;
+    }
+  }
+
   pPool->release();
 }
-
-#pragma endregion Renderer }
