@@ -41,7 +41,7 @@ class Renderer {
   void buildDepthStencilStates();
   void buildTextures();
   void buildBuffers();
-  void generateMandelbrotTexture();
+  void generateMandelbrotTexture(MTL::CommandBuffer* pCommandBuffer);
   void draw(MTK::View* pView);
 
  private:
@@ -56,10 +56,12 @@ class Renderer {
   MTL::Buffer* _pInstanceDataBuffer[kMaxFramesInFlight];
   MTL::Buffer* _pCameraDataBuffer[kMaxFramesInFlight];
   MTL::Buffer* _pIndexBuffer;
+  MTL::Buffer* _pTextureAnimationBuffer;
   float _angle;
   int _frame;
   dispatch_semaphore_t _semaphore;
   static const int kMaxFramesInFlight;
+  uint _animationIndex;
 };
 
 class MyMTKViewDelegate : public MTK::ViewDelegate {
@@ -198,7 +200,7 @@ void MyAppDelegate::applicationDidFinishLaunching(
 
   _pWindow->setContentView(_pMtkView);
   _pWindow->setTitle(NS::String::string(
-      "08 - Compute Set", NS::StringEncoding::UTF8StringEncoding));
+      "09 - Compute to Render", NS::StringEncoding::UTF8StringEncoding));
 
   _pWindow->makeKeyAndOrderFront(nullptr);
 
@@ -305,19 +307,19 @@ simd::float3x3 discardTranslation(const simd::float4x4& m) {
 const int Renderer::kMaxFramesInFlight = 3;
 
 Renderer::Renderer(MTL::Device* pDevice)
-    : _pDevice(pDevice->retain()), _angle(0.f), _frame(0) {
+    : _pDevice(pDevice->retain()), _angle(0.f), _frame(0), _animationIndex(0) {
   _pCommandQueue = _pDevice->newCommandQueue();
   buildShaders();
   buildComputePipeline();
   buildDepthStencilStates();
   buildTextures();
   buildBuffers();
-  generateMandelbrotTexture();
 
   _semaphore = dispatch_semaphore_create(Renderer::kMaxFramesInFlight);
 }
 
 Renderer::~Renderer() {
+  _pTextureAnimationBuffer->release();
   _pTexture->release();
   _pShaderLibrary->release();
   _pDepthStencilState->release();
@@ -472,11 +474,26 @@ void Renderer::buildComputePipeline() {
 
         kernel void mandelbrot_set(texture2d< half, access::write > tex [[texture(0)]],
                                    uint2 index [[thread_position_in_grid]],
-                                   uint2 gridSize [[threads_per_grid]])
+                                   uint2 gridSize [[threads_per_grid]],
+                                   device const uint* frame [[buffer(0)]])
         {
-            // Scale
-            float x0 = 2.0 * index.x / gridSize.x - 1.5;
-            float y0 = 2.0 * index.y / gridSize.y - 1.0;
+            constexpr float kAnimationFrequency = 0.01;
+            constexpr float kAnimationSpeed = 4;
+            constexpr float kAnimationScaleLow = 0.62;
+            constexpr float kAnimationScale = 0.38;
+
+            constexpr float2 kMandelbrotPixelOffset = {-0.2, -0.35};
+            constexpr float2 kMandelbrotOrigin = {-1.2, -0.32};
+            constexpr float2 kMandelbrotScale = {2.2, 2.0};
+
+            // Map time to zoom value in [kAnimationScaleLow, 1]
+            float zoom = kAnimationScaleLow + kAnimationScale * cos(kAnimationFrequency * *frame);
+            // Speed up zooming
+            zoom = pow(zoom, kAnimationSpeed);
+
+            //Scale
+            float x0 = zoom * kMandelbrotScale.x * ((float)index.x / gridSize.x + kMandelbrotPixelOffset.x) + kMandelbrotOrigin.x;
+            float y0 = zoom * kMandelbrotScale.y * ((float)index.y / gridSize.y + kMandelbrotPixelOffset.y) + kMandelbrotOrigin.y;
 
             // Implement Mandelbrot set
             float x = 0.0;
@@ -624,17 +641,24 @@ void Renderer::buildBuffers() {
     _pCameraDataBuffer[i] =
         _pDevice->newBuffer(cameraDataSize, MTL::ResourceStorageModeManaged);
   }
+
+  _pTextureAnimationBuffer =
+      _pDevice->newBuffer(sizeof(uint), MTL::ResourceStorageModeManaged);
 }
 
-void Renderer::generateMandelbrotTexture() {
-  MTL::CommandBuffer* pCommandBuffer = _pCommandQueue->commandBuffer();
+void Renderer::generateMandelbrotTexture(MTL::CommandBuffer* pCommandBuffer) {
   assert(pCommandBuffer);
+
+  uint* ptr = reinterpret_cast<uint*>(_pTextureAnimationBuffer->contents());
+  *ptr = (_animationIndex++) % 5000;
+  _pTextureAnimationBuffer->didModifyRange(NS::Range::Make(0, sizeof(uint)));
 
   MTL::ComputeCommandEncoder* pComputeEncoder =
       pCommandBuffer->computeCommandEncoder();
 
   pComputeEncoder->setComputePipelineState(_pComputePSO);
   pComputeEncoder->setTexture(_pTexture, 0);
+  pComputeEncoder->setBuffer(_pTextureAnimationBuffer, 0, 0);
 
   MTL::Size gridSize = MTL::Size(kTextureWidth, kTextureHeight, 1);
 
@@ -644,8 +668,6 @@ void Renderer::generateMandelbrotTexture() {
   pComputeEncoder->dispatchThreads(gridSize, threadgroupSize);
 
   pComputeEncoder->endEncoding();
-
-  pCommandBuffer->commit();
 }
 
 void Renderer::draw(MTK::View* pView) {
@@ -733,6 +755,10 @@ void Renderer::draw(MTK::View* pView) {
       math::discardTranslation(pCameraData->worldTransform);
   pCameraDataBuffer->didModifyRange(
       NS::Range::Make(0, sizeof(shader_types::CameraData)));
+
+  // Update texture:
+
+  generateMandelbrotTexture(pCmd);
 
   // Begin render pass:
 
