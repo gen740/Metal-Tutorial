@@ -1,6 +1,8 @@
 #include <array>
 #include <cassert>
+#include <cstddef>
 #include <iostream>
+#include <vector>
 
 #define NS_PRIVATE_IMPLEMENTATION
 #define MTL_PRIVATE_IMPLEMENTATION
@@ -12,14 +14,26 @@
 #include <Metal/Metal.hpp>
 #include <MetalKit/MetalKit.hpp>
 
-static constexpr size_t kNumInstances = 62;
+static constexpr size_t kNumInstances = 32;
 static constexpr size_t kMaxFramesInFlight = 3;
+
+namespace math {
+constexpr simd::float3 add(const simd::float3& a, const simd::float3& b);
+constexpr simd_float4x4 makeIdentity();
+simd::float4x4 makePerspective();
+simd::float4x4 makeXRotate(float angleRadians);
+simd::float4x4 makeYRotate(float angleRadians);
+simd::float4x4 makeZRotate(float angleRadians);
+simd::float4x4 makeTranslate(const simd::float3& v);
+simd::float4x4 makeScale(const simd::float3& v);
+}  // namespace math
 
 class Renderer {
  public:
   explicit Renderer(MTL::Device* pDevice);
   ~Renderer();
   void buildShaders();
+  void buildDepthStencilStates();
   void buildBuffers();
   void draw(MTK::View* pView);
 
@@ -28,8 +42,10 @@ class Renderer {
   MTL::CommandQueue* _pCommandQueue;
   MTL::Library* _pShaderLibrary{};
   MTL::RenderPipelineState* _pPSO{};
+  MTL::DepthStencilState* _pDepthStencilState{};
   MTL::Buffer* _pVertexDataBuffer{};
   std::array<MTL::Buffer*, kMaxFramesInFlight> _pInstanceDataBuffer{};
+  std::array<MTL::Buffer*, kMaxFramesInFlight> _pCameraDataBuffer{};
   MTL::Buffer* _pIndexBuffer{};
   float _angle{};
   int _frame{};
@@ -156,14 +172,17 @@ void MyAppDelegate::applicationDidFinishLaunching(
 
   _pMtkView = MTK::View::alloc()->init(frame, _pDevice);
   _pMtkView->setColorPixelFormat(MTL::PixelFormat::PixelFormatBGRA8Unorm_sRGB);
-  _pMtkView->setClearColor(MTL::ClearColor::Make(0.0, 0.0, 0.0, 1.0));
+  _pMtkView->setClearColor(MTL::ClearColor::Make(0.1, 0.1, 0.1, 1.0));
+  _pMtkView->setDepthStencilPixelFormat(
+      MTL::PixelFormat::PixelFormatDepth16Unorm);
+  _pMtkView->setClearDepth(1.0F);
 
   _pViewDelegate = new MyMTKViewDelegate(_pDevice);
   _pMtkView->setDelegate(_pViewDelegate);
 
   _pWindow->setContentView(_pMtkView);
   _pWindow->setTitle(NS::String::string(
-      "04 - Instancing", NS::StringEncoding::UTF8StringEncoding));
+      "05 - Perspective", NS::StringEncoding::UTF8StringEncoding));
 
   _pWindow->makeKeyAndOrderFront(nullptr);
 
@@ -185,11 +204,79 @@ void MyMTKViewDelegate::drawInMTKView(MTK::View* pView) {
   _pRenderer->draw(pView);
 }
 
+namespace math {
+constexpr simd::float3 add(const simd::float3& a, const simd::float3& b) {
+  return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+constexpr simd_float4x4 makeIdentity() {
+  using simd::float4;
+  return (simd_float4x4){
+      (float4){1.F, 0.F, 0.F, 0.F}, (float4){0.F, 1.F, 0.F, 0.F},
+      (float4){0.F, 0.F, 1.F, 0.F}, (float4){0.F, 0.F, 0.F, 1.F}};
+}
+
+simd::float4x4 makePerspective(float fovRadians, float aspect, float znear,
+                               float zfar) {
+  using simd::float4;
+  float ys = 1.F / tanf(fovRadians * 0.5F);
+  float xs = ys / aspect;
+  float zs = zfar / (znear - zfar);
+  return simd_matrix_from_rows(
+      (float4){xs, 0.0F, 0.0F, 0.0F}, (float4){0.0F, ys, 0.0F, 0.0F},
+      (float4){0.0F, 0.0F, zs, znear * zs}, (float4){0, 0, -1, 0});
+}
+
+simd::float4x4 makeXRotate(float angleRadians) {
+  using simd::float4;
+  const float a = angleRadians;
+  return simd_matrix_from_rows((float4){1.0F, 0.0F, 0.0F, 0.0F},
+                               (float4){0.0F, cosf(a), sinf(a), 0.0F},
+                               (float4){0.0F, -sinf(a), cosf(a), 0.0F},
+                               (float4){0.0F, 0.0F, 0.0F, 1.0F});
+}
+
+simd::float4x4 makeYRotate(float angleRadians) {
+  using simd::float4;
+  const float a = angleRadians;
+  return simd_matrix_from_rows((float4){cosf(a), 0.0F, sinf(a), 0.0F},
+                               (float4){0.0F, 1.0F, 0.0F, 0.0F},
+                               (float4){-sinf(a), 0.0F, cosf(a), 0.0F},
+                               (float4){0.0F, 0.0F, 0.0F, 1.0F});
+}
+
+simd::float4x4 makeZRotate(float angleRadians) {
+  using simd::float4;
+  const float a = angleRadians;
+  return simd_matrix_from_rows((float4){cosf(a), sinf(a), 0.0F, 0.0F},
+                               (float4){-sinf(a), cosf(a), 0.0F, 0.0F},
+                               (float4){0.0F, 0.0F, 1.0F, 0.0F},
+                               (float4){0.0F, 0.0F, 0.0F, 1.0F});
+}
+
+simd::float4x4 makeTranslate(const simd::float3& v) {
+  using simd::float4;
+  const float4 col0 = {1.0F, 0.0F, 0.0F, 0.0F};
+  const float4 col1 = {0.0F, 1.0F, 0.0F, 0.0F};
+  const float4 col2 = {0.0F, 0.0F, 1.0F, 0.0F};
+  const float4 col3 = {v.x, v.y, v.z, 1.0F};
+  return simd_matrix(col0, col1, col2, col3);
+}
+
+simd::float4x4 makeScale(const simd::float3& v) {
+  using simd::float4;
+  return simd_matrix((float4){v.x, 0, 0, 0}, (float4){0, v.y, 0, 0},
+                     (float4){0, 0, v.z, 0}, (float4){0, 0, 0, 1.0});
+}
+
+}  // namespace math
+
 const int Renderer::kMaxFramesInFlight = 3;
 
 Renderer::Renderer(MTL::Device* pDevice) : _pDevice(pDevice->retain()) {
   _pCommandQueue = _pDevice->newCommandQueue();
   buildShaders();
+  buildDepthStencilStates();
   buildBuffers();
 
   _semaphore = dispatch_semaphore_create(Renderer::kMaxFramesInFlight);
@@ -197,9 +284,13 @@ Renderer::Renderer(MTL::Device* pDevice) : _pDevice(pDevice->retain()) {
 
 Renderer::~Renderer() {
   _pShaderLibrary->release();
+  _pDepthStencilState->release();
   _pVertexDataBuffer->release();
   for (int i = 0; i < kMaxFramesInFlight; ++i) {
     _pInstanceDataBuffer[i]->release();
+  }
+  for (int i = 0; i < kMaxFramesInFlight; ++i) {
+    _pCameraDataBuffer[i]->release();
   }
   _pIndexBuffer->release();
   _pPSO->release();
@@ -211,6 +302,11 @@ namespace shader_types {
 struct InstanceData {
   simd::float4x4 instanceTransform;
   simd::float4 instanceColor{};
+};
+
+struct CameraData {
+  simd::float4x4 perspectiveTransform;
+  simd::float4x4 worldTransform;
 };
 }  // namespace shader_types
 
@@ -238,14 +334,23 @@ void Renderer::buildShaders() {
             float4 instanceColor;
         };
 
+        struct CameraData
+        {
+            float4x4 perspectiveTransform;
+            float4x4 worldTransform;
+        };
+
         v2f vertex vertexMain( device const VertexData* vertexData [[buffer(0)]],
                                device const InstanceData* instanceData [[buffer(1)]],
+                               device const CameraData& cameraData [[buffer(2)]],
                                uint vertexId [[vertex_id]],
                                uint instanceId [[instance_id]] )
         {
             v2f o;
             float4 pos = float4( vertexData[ vertexId ].position, 1.0 );
-            o.position = instanceData[ instanceId ].instanceTransform * pos;
+            pos = instanceData[ instanceId ].instanceTransform * pos;
+            pos = cameraData.perspectiveTransform * cameraData.worldTransform * pos;
+            o.position = pos;
             o.color = half3( instanceData[ instanceId ].instanceColor.rgb );
             return o;
         }
@@ -260,7 +365,7 @@ void Renderer::buildShaders() {
   MTL::Library* pLibrary = _pDevice->newLibrary(
       NS::String::string(shaderSrc, UTF8StringEncoding), nullptr, &pError);
   if (pLibrary == nullptr) {
-    std::cout << pError->localizedDescription()->utf8String() << std::endl;
+    std::cerr << pError->localizedDescription()->utf8String() << std::endl;
     assert(false);
   }
 
@@ -275,10 +380,12 @@ void Renderer::buildShaders() {
   pDesc->setFragmentFunction(pFragFn);
   pDesc->colorAttachments()->object(0)->setPixelFormat(
       MTL::PixelFormat::PixelFormatBGRA8Unorm_sRGB);
+  pDesc->setDepthAttachmentPixelFormat(
+      MTL::PixelFormat::PixelFormatDepth16Unorm);
 
   _pPSO = _pDevice->newRenderPipelineState(pDesc, &pError);
   if (_pPSO == nullptr) {
-    std::cout << pError->localizedDescription()->utf8String() << std::endl;
+    std::cerr << pError->localizedDescription()->utf8String() << std::endl;
     assert(false);
   }
 
@@ -288,20 +395,47 @@ void Renderer::buildShaders() {
   _pShaderLibrary = pLibrary;
 }
 
+void Renderer::buildDepthStencilStates() {
+  MTL::DepthStencilDescriptor* pDsDesc =
+      MTL::DepthStencilDescriptor::alloc()->init();
+  pDsDesc->setDepthCompareFunction(MTL::CompareFunction::CompareFunctionLess);
+  pDsDesc->setDepthWriteEnabled(true);
+
+  _pDepthStencilState = _pDevice->newDepthStencilState(pDsDesc);
+
+  pDsDesc->release();
+}
+
 void Renderer::buildBuffers() {
   using simd::float3;
+  const float s = 0.5F;
 
-  const float s = 0.1F;
+  std::vector<float3> verts = {float3{-s, -s, +s}, float3{+s, -s, +s},
+                               float3{+s, +s, +s}, float3{-s, +s, +s},
 
-  std::array<float3, 4> verts = {float3{-s, -s, +s}, float3{+s, -s, +s},
-                                 float3{+s, +s, +s}, float3{-s, +s, +s}};
+                               float3{-s, -s, -s}, float3{-s, +s, -s},
+                               float3{+s, +s, -s}, float3{+s, -s, -s}};
 
-  std::array<uint16_t, 6> indices = {
-      0, 1, 2, 2, 3, 0,
-  };
+  std::vector<uint16_t> indices = {0, 1, 2, /* front */
+                                   2, 3, 0,
 
-  const size_t vertexDataSize = sizeof(verts);
-  const size_t indexDataSize = sizeof(indices);
+                                   1, 7, 6, /* right */
+                                   6, 2, 1,
+
+                                   7, 4, 5, /* back */
+                                   5, 6, 7,
+
+                                   4, 0, 3, /* left */
+                                   3, 5, 4,
+
+                                   3, 2, 6, /* top */
+                                   6, 5, 3,
+
+                                   4, 7, 1, /* bottom */
+                                   1, 0, 4};
+
+  const size_t vertexDataSize = verts.size() * sizeof(float3);
+  const size_t indexDataSize = indices.size() * sizeof(float3);
 
   MTL::Buffer* pVertexBuffer =
       _pDevice->newBuffer(vertexDataSize, MTL::ResourceStorageModeManaged);
@@ -324,9 +458,17 @@ void Renderer::buildBuffers() {
     _pInstanceDataBuffer[i] =
         _pDevice->newBuffer(instanceDataSize, MTL::ResourceStorageModeManaged);
   }
+
+  const size_t cameraDataSize =
+      kMaxFramesInFlight * sizeof(shader_types::CameraData);
+  for (size_t i = 0; i < kMaxFramesInFlight; ++i) {
+    _pCameraDataBuffer[i] =
+        _pDevice->newBuffer(cameraDataSize, MTL::ResourceStorageModeManaged);
+  }
 }
 
 void Renderer::draw(MTK::View* pView) {
+  using simd::float3;
   using simd::float4;
   using simd::float4x4;
 
@@ -347,14 +489,31 @@ void Renderer::draw(MTK::View* pView) {
   const float scl = 0.1F;
   auto* pInstanceData = reinterpret_cast<shader_types::InstanceData*>(
       pInstanceDataBuffer->contents());
+
+  float3 objectPosition = {0.F, 0.F, -5.F};
+
+  // Update instance positions:
+
+  float4x4 rt = math::makeTranslate(objectPosition);
+  float4x4 rr = math::makeYRotate(-_angle);
+  float4x4 rtInv = math::makeTranslate(
+      {-objectPosition.x, -objectPosition.y, -objectPosition.z});
+  float4x4 fullObjectRot = rt * rr * rtInv;
+
   for (size_t i = 0; i < kNumInstances; ++i) {
     float iDivNumInstances = i / static_cast<float>(kNumInstances);
     float xoff = (iDivNumInstances * 2.0F - 1.0F) + (1.F / kNumInstances);
     float yoff = sin((iDivNumInstances + _angle) * 2.0F * M_PI);
-    pInstanceData[i].instanceTransform = (float4x4){
-        (float4){scl * sinf(_angle), scl * cosf(_angle), 0.F, 0.F},
-        (float4){scl * cosf(_angle), scl * -sinf(_angle), 0.F, 0.F},
-        (float4){0.F, 0.F, scl, 0.F}, (float4){xoff, yoff, 0.F, 1.F}};
+
+    // Use the tiny math library to apply a 3D transformation to the instance.
+    float4x4 scale = math::makeScale((float3){scl, scl, scl});
+    float4x4 zrot = math::makeZRotate(_angle);
+    float4x4 yrot = math::makeYRotate(_angle);
+    float4x4 translate =
+        math::makeTranslate(math::add(objectPosition, {xoff, yoff, 0.F}));
+
+    pInstanceData[i].instanceTransform =
+        fullObjectRot * translate * yrot * zrot * scale;
 
     float r = iDivNumInstances;
     float g = 1.0F - r;
@@ -364,14 +523,34 @@ void Renderer::draw(MTK::View* pView) {
   pInstanceDataBuffer->didModifyRange(
       NS::Range::Make(0, pInstanceDataBuffer->length()));
 
+  // Update camera state:
+
+  MTL::Buffer* pCameraDataBuffer = _pCameraDataBuffer[_frame];
+  auto* pCameraData = reinterpret_cast<shader_types::CameraData*>(
+      pCameraDataBuffer->contents());
+  pCameraData->perspectiveTransform =
+      math::makePerspective(45.F * M_PI / 180.F, 1.F, 0.03F, 500.0F);
+  pCameraData->worldTransform = math::makeIdentity();
+  pCameraDataBuffer->didModifyRange(
+      NS::Range::Make(0, sizeof(shader_types::CameraData)));
+
+  // Begin render pass:
+
   MTL::RenderPassDescriptor* pRpd = pView->currentRenderPassDescriptor();
   MTL::RenderCommandEncoder* pEnc = pCmd->renderCommandEncoder(pRpd);
 
   pEnc->setRenderPipelineState(_pPSO);
+  pEnc->setDepthStencilState(_pDepthStencilState);
+
   pEnc->setVertexBuffer(_pVertexDataBuffer, /* offset */ 0, /* index */ 0);
   pEnc->setVertexBuffer(pInstanceDataBuffer, /* offset */ 0, /* index */ 1);
+  pEnc->setVertexBuffer(pCameraDataBuffer, /* offset */ 0, /* index */ 2);
 
-  pEnc->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, 6,
+  pEnc->setCullMode(MTL::CullModeBack);
+  pEnc->setFrontFacingWinding(MTL::Winding::WindingCounterClockwise);
+
+  pEnc->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                              static_cast<NS::UInteger>(6 * 6),
                               MTL::IndexType::IndexTypeUInt16, _pIndexBuffer, 0,
                               kNumInstances);
 
