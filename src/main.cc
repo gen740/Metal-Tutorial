@@ -1,21 +1,6 @@
-/*
- *
- * Copyright 2022 Apple Inc.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
+#include <array>
 #include <cassert>
+#include <iostream>
 
 #define NS_PRIVATE_IMPLEMENTATION
 #define MTL_PRIVATE_IMPLEMENTATION
@@ -27,10 +12,9 @@
 #include <Metal/Metal.hpp>
 #include <MetalKit/MetalKit.hpp>
 
-#pragma region Declarations {
 class Renderer {
  public:
-  Renderer(MTL::Device* pDevice);
+  explicit Renderer(MTL::Device* pDevice);
   ~Renderer();
   void buildShaders();
   void buildBuffers();
@@ -39,16 +23,18 @@ class Renderer {
  private:
   MTL::Device* _pDevice;
   MTL::CommandQueue* _pCommandQueue;
-  MTL::RenderPipelineState* _pPSO;
-  MTL::Buffer* _pVertexPositionsBuffer;
-  MTL::Buffer* _pVertexColorsBuffer;
+  MTL::Library* _pShaderLibrary{};
+  MTL::RenderPipelineState* _pPSO{};
+  MTL::Buffer* _pArgBuffer{};
+  MTL::Buffer* _pVertexPositionsBuffer{};
+  MTL::Buffer* _pVertexColorsBuffer{};
 };
 
 class MyMTKViewDelegate : public MTK::ViewDelegate {
  public:
-  MyMTKViewDelegate(MTL::Device* pDevice);
-  virtual ~MyMTKViewDelegate() override;
-  virtual void drawInMTKView(MTK::View* pView) override;
+  explicit MyMTKViewDelegate(MTL::Device* pDevice);
+  ~MyMTKViewDelegate() override;
+  void drawInMTKView(MTK::View* pView) override;
 
  private:
   Renderer* _pRenderer;
@@ -56,27 +42,23 @@ class MyMTKViewDelegate : public MTK::ViewDelegate {
 
 class MyAppDelegate : public NS::ApplicationDelegate {
  public:
-  ~MyAppDelegate();
+  ~MyAppDelegate() override;
 
-  NS::Menu* createMenuBar();
+  static NS::Menu* createMenuBar();
 
-  virtual void applicationWillFinishLaunching(
-      NS::Notification* pNotification) override;
-  virtual void applicationDidFinishLaunching(
-      NS::Notification* pNotification) override;
-  virtual bool applicationShouldTerminateAfterLastWindowClosed(
+  void applicationWillFinishLaunching(NS::Notification* pNotification) override;
+  void applicationDidFinishLaunching(NS::Notification* pNotification) override;
+  bool applicationShouldTerminateAfterLastWindowClosed(
       NS::Application* pSender) override;
 
  private:
-  NS::Window* _pWindow;
-  MTK::View* _pMtkView;
-  MTL::Device* _pDevice;
+  NS::Window* _pWindow{};
+  MTK::View* _pMtkView{};
+  MTL::Device* _pDevice{};
   MyMTKViewDelegate* _pViewDelegate = nullptr;
 };
 
-#pragma endregion Declarations }
-
-int main(int argc, char* argv[]) {
+int main() {
   NS::AutoreleasePool* pAutoreleasePool = NS::AutoreleasePool::alloc()->init();
 
   MyAppDelegate del;
@@ -90,8 +72,6 @@ int main(int argc, char* argv[]) {
   return 0;
 }
 
-#pragma mark - AppDelegate
-#pragma region AppDelegate {
 MyAppDelegate::~MyAppDelegate() {
   _pMtkView->release();
   _pWindow->release();
@@ -113,7 +93,7 @@ NS::Menu* MyAppDelegate::createMenuBar() {
                                  ->stringByAppendingString(appName);
   SEL quitCb = NS::MenuItem::registerActionCallback(
       "appQuit", [](void*, SEL, const NS::Object* pSender) {
-        auto pApp = NS::Application::sharedApplication();
+        auto* pApp = NS::Application::sharedApplication();
         pApp->terminate(pSender);
       });
 
@@ -177,7 +157,7 @@ void MyAppDelegate::applicationDidFinishLaunching(
 
   _pWindow->setContentView(_pMtkView);
   _pWindow->setTitle(NS::String::string(
-      "01 - Primitive", NS::StringEncoding::UTF8StringEncoding));
+      "02 - Argument Buffers", NS::StringEncoding::UTF8StringEncoding));
 
   _pWindow->makeKeyAndOrderFront(nullptr);
 
@@ -191,10 +171,6 @@ bool MyAppDelegate::applicationShouldTerminateAfterLastWindowClosed(
   return true;
 }
 
-#pragma endregion AppDelegate }
-
-#pragma mark - ViewDelegate
-#pragma region ViewDelegate {
 MyMTKViewDelegate::MyMTKViewDelegate(MTL::Device* pDevice)
     : MTK::ViewDelegate(), _pRenderer(new Renderer(pDevice)) {}
 
@@ -204,10 +180,6 @@ void MyMTKViewDelegate::drawInMTKView(MTK::View* pView) {
   _pRenderer->draw(pView);
 }
 
-#pragma endregion ViewDelegate }
-
-#pragma mark - Renderer
-#pragma region Renderer {
 Renderer::Renderer(MTL::Device* pDevice) : _pDevice(pDevice->retain()) {
   _pCommandQueue = _pDevice->newCommandQueue();
   buildShaders();
@@ -215,6 +187,8 @@ Renderer::Renderer(MTL::Device* pDevice) : _pDevice(pDevice->retain()) {
 }
 
 Renderer::~Renderer() {
+  _pShaderLibrary->release();
+  _pArgBuffer->release();
   _pVertexPositionsBuffer->release();
   _pVertexColorsBuffer->release();
   _pPSO->release();
@@ -235,13 +209,17 @@ void Renderer::buildShaders() {
             half3 color;
         };
 
-        v2f vertex vertexMain( uint vertexId [[vertex_id]],
-                               device const float3* positions [[buffer(0)]],
-                               device const float3* colors [[buffer(1)]] )
+        struct VertexData
+        {
+            device float3* positions [[id(0)]];
+            device float3* colors [[id(1)]];
+        };
+
+        v2f vertex vertexMain( device const VertexData* vertexData [[buffer(0)]], uint vertexId [[vertex_id]] )
         {
             v2f o;
-            o.position = float4( positions[ vertexId ], 1.0 );
-            o.color = half3 ( colors[ vertexId ] );
+            o.position = float4( vertexData->positions[ vertexId ], 1.0 );
+            o.color = half3(vertexData->colors[ vertexId ]);
             return o;
         }
 
@@ -254,8 +232,8 @@ void Renderer::buildShaders() {
   NS::Error* pError = nullptr;
   MTL::Library* pLibrary = _pDevice->newLibrary(
       NS::String::string(shaderSrc, UTF8StringEncoding), nullptr, &pError);
-  if (!pLibrary) {
-    __builtin_printf("%s", pError->localizedDescription()->utf8String());
+  if (pLibrary == nullptr) {
+    std::cerr << pError->localizedDescription()->utf8String() << std::endl;
     assert(false);
   }
 
@@ -272,25 +250,29 @@ void Renderer::buildShaders() {
       MTL::PixelFormat::PixelFormatBGRA8Unorm_sRGB);
 
   _pPSO = _pDevice->newRenderPipelineState(pDesc, &pError);
-  if (!_pPSO) {
-    __builtin_printf("%s", pError->localizedDescription()->utf8String());
+  if (_pPSO == nullptr) {
+    std::cerr << pError->localizedDescription()->utf8String() << std::endl;
     assert(false);
   }
 
   pVertexFn->release();
   pFragFn->release();
   pDesc->release();
-  pLibrary->release();
+  _pShaderLibrary = pLibrary;
 }
 
 void Renderer::buildBuffers() {
+  using simd::float3;
+
   const size_t NumVertices = 3;
 
-  simd::float3 positions[NumVertices] = {
-      {-0.8f, 0.8f, 0.0f}, {0.0f, -0.8f, 0.0f}, {+0.8f, 0.8f, 0.0f}};
+  std::array<float3, NumVertices> positions = {float3{-0.8F, 0.8F, 0.0F},
+                                               float3{0.0F, -0.8F, 0.0F},
+                                               float3{+0.8F, 0.8F, 0.0F}};
 
-  simd::float3 colors[NumVertices] = {
-      {1.0, 0.3f, 0.2f}, {0.8f, 1.0, 0.0f}, {0.8f, 0.0f, 1.0}};
+  std::array<float3, NumVertices> colors = {float3{1.0, 0.3F, 0.2F},
+                                            float3{0.8F, 1.0, 0.0F},
+                                            float3{0.8F, 0.0F, 1.0}};
 
   const size_t positionsDataSize = NumVertices * sizeof(simd::float3);
   const size_t colorDataSize = NumVertices * sizeof(simd::float3);
@@ -303,13 +285,35 @@ void Renderer::buildBuffers() {
   _pVertexPositionsBuffer = pVertexPositionsBuffer;
   _pVertexColorsBuffer = pVertexColorsBuffer;
 
-  memcpy(_pVertexPositionsBuffer->contents(), positions, positionsDataSize);
-  memcpy(_pVertexColorsBuffer->contents(), colors, colorDataSize);
+  memcpy(_pVertexPositionsBuffer->contents(), positions.data(),
+         positionsDataSize);
+  memcpy(_pVertexColorsBuffer->contents(), colors.data(), colorDataSize);
 
   _pVertexPositionsBuffer->didModifyRange(
       NS::Range::Make(0, _pVertexPositionsBuffer->length()));
   _pVertexColorsBuffer->didModifyRange(
       NS::Range::Make(0, _pVertexColorsBuffer->length()));
+
+  using NS::StringEncoding::UTF8StringEncoding;
+  assert(_pShaderLibrary);
+
+  MTL::Function* pVertexFn = _pShaderLibrary->newFunction(
+      NS::String::string("vertexMain", UTF8StringEncoding));
+  MTL::ArgumentEncoder* pArgEncoder = pVertexFn->newArgumentEncoder(0);
+
+  MTL::Buffer* pArgBuffer = _pDevice->newBuffer(
+      pArgEncoder->encodedLength(), MTL::ResourceStorageModeManaged);
+  _pArgBuffer = pArgBuffer;
+
+  pArgEncoder->setArgumentBuffer(_pArgBuffer, 0);
+
+  pArgEncoder->setBuffer(_pVertexPositionsBuffer, 0, 0);
+  pArgEncoder->setBuffer(_pVertexColorsBuffer, 0, 1);
+
+  _pArgBuffer->didModifyRange(NS::Range::Make(0, _pArgBuffer->length()));
+
+  pVertexFn->release();
+  pArgEncoder->release();
 }
 
 void Renderer::draw(MTK::View* pView) {
@@ -320,10 +324,12 @@ void Renderer::draw(MTK::View* pView) {
   MTL::RenderCommandEncoder* pEnc = pCmd->renderCommandEncoder(pRpd);
 
   pEnc->setRenderPipelineState(_pPSO);
-  pEnc->setVertexBuffer(_pVertexPositionsBuffer, 0, 0);
-  pEnc->setVertexBuffer(_pVertexColorsBuffer, 0, 1);
+  pEnc->setVertexBuffer(_pArgBuffer, 0, 0);
+  pEnc->useResource(_pVertexPositionsBuffer, MTL::ResourceUsageRead);
+  pEnc->useResource(_pVertexColorsBuffer, MTL::ResourceUsageRead);
   pEnc->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
-                       NS::UInteger(0), NS::UInteger(3));
+                       static_cast<NS::UInteger>(0),
+                       static_cast<NS::UInteger>(3));
 
   pEnc->endEncoding();
   pCmd->presentDrawable(pView->currentDrawable());
@@ -331,5 +337,3 @@ void Renderer::draw(MTK::View* pView) {
 
   pPool->release();
 }
-
-#pragma endregion Renderer }
