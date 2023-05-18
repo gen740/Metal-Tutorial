@@ -21,6 +21,7 @@ Diagnostics:
       # - cppcoreguidelines-avoid-reference-coroutine-parameters
     Remove:
       - bugprone-easily-swappable-parameters
+      - bugprone-narrowing-conversions
       - modernize-use-trailing-return-type
       # - readability-implicit-bool-conversion
       - readability-function-cognitive-complexity
