@@ -16,7 +16,10 @@ static constexpr size_t kInstanceDepth = 10;
 static constexpr size_t kNumInstances =
     (kInstanceRows * kInstanceColumns * kInstanceDepth);
 static constexpr size_t kMaxFramesInFlight = 3;
+static constexpr uint32_t kTextureWidth = 128;
+static constexpr uint32_t kTextureHeight = 128;
 
+#pragma region Declarations {
 namespace math {
 constexpr simd::float3 add(const simd::float3& a, const simd::float3& b);
 constexpr simd_float4x4 makeIdentity();
@@ -34,9 +37,11 @@ class Renderer {
   Renderer(MTL::Device* pDevice);
   ~Renderer();
   void buildShaders();
+  void buildComputePipeline();
   void buildDepthStencilStates();
   void buildTextures();
   void buildBuffers();
+  void generateMandelbrotTexture();
   void draw(MTK::View* pView);
 
  private:
@@ -44,6 +49,7 @@ class Renderer {
   MTL::CommandQueue* _pCommandQueue;
   MTL::Library* _pShaderLibrary;
   MTL::RenderPipelineState* _pPSO;
+  MTL::ComputePipelineState* _pComputePSO;
   MTL::DepthStencilState* _pDepthStencilState;
   MTL::Texture* _pTexture;
   MTL::Buffer* _pVertexDataBuffer;
@@ -86,6 +92,8 @@ class MyAppDelegate : public NS::ApplicationDelegate {
   MyMTKViewDelegate* _pViewDelegate = nullptr;
 };
 
+#pragma endregion Declarations }
+
 int main(int argc, char* argv[]) {
   NS::AutoreleasePool* pAutoreleasePool = NS::AutoreleasePool::alloc()->init();
 
@@ -100,6 +108,8 @@ int main(int argc, char* argv[]) {
   return 0;
 }
 
+#pragma mark - AppDelegate
+#pragma region AppDelegate {
 MyAppDelegate::~MyAppDelegate() {
   _pMtkView->release();
   _pWindow->release();
@@ -188,7 +198,7 @@ void MyAppDelegate::applicationDidFinishLaunching(
 
   _pWindow->setContentView(_pMtkView);
   _pWindow->setTitle(NS::String::string(
-      "07 - Texture Mapping", NS::StringEncoding::UTF8StringEncoding));
+      "08 - Compute Set", NS::StringEncoding::UTF8StringEncoding));
 
   _pWindow->makeKeyAndOrderFront(nullptr);
 
@@ -202,6 +212,10 @@ bool MyAppDelegate::applicationShouldTerminateAfterLastWindowClosed(
   return true;
 }
 
+#pragma endregion AppDelegate }
+
+#pragma mark - ViewDelegate
+#pragma region ViewDelegate {
 MyMTKViewDelegate::MyMTKViewDelegate(MTL::Device* pDevice)
     : MTK::ViewDelegate(), _pRenderer(new Renderer(pDevice)) {}
 
@@ -210,6 +224,10 @@ MyMTKViewDelegate::~MyMTKViewDelegate() { delete _pRenderer; }
 void MyMTKViewDelegate::drawInMTKView(MTK::View* pView) {
   _pRenderer->draw(pView);
 }
+
+#pragma endregion ViewDelegate }
+
+#pragma mark - Math
 
 namespace math {
 constexpr simd::float3 add(const simd::float3& a, const simd::float3& b) {
@@ -282,15 +300,19 @@ simd::float3x3 discardTranslation(const simd::float4x4& m) {
 
 }  // namespace math
 
+#pragma mark - Renderer
+#pragma region Renderer {
 const int Renderer::kMaxFramesInFlight = 3;
 
 Renderer::Renderer(MTL::Device* pDevice)
     : _pDevice(pDevice->retain()), _angle(0.f), _frame(0) {
   _pCommandQueue = _pDevice->newCommandQueue();
   buildShaders();
+  buildComputePipeline();
   buildDepthStencilStates();
   buildTextures();
   buildBuffers();
+  generateMandelbrotTexture();
 
   _semaphore = dispatch_semaphore_create(Renderer::kMaxFramesInFlight);
 }
@@ -307,6 +329,7 @@ Renderer::~Renderer() {
     _pCameraDataBuffer[i]->release();
   }
   _pIndexBuffer->release();
+  _pComputePSO->release();
   _pPSO->release();
   _pCommandQueue->release();
   _pDevice->release();
@@ -442,6 +465,58 @@ void Renderer::buildShaders() {
   _pShaderLibrary = pLibrary;
 }
 
+void Renderer::buildComputePipeline() {
+  const char* kernelSrc = R"(
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void mandelbrot_set(texture2d< half, access::write > tex [[texture(0)]],
+                                   uint2 index [[thread_position_in_grid]],
+                                   uint2 gridSize [[threads_per_grid]])
+        {
+            // Scale
+            float x0 = 2.0 * index.x / gridSize.x - 1.5;
+            float y0 = 2.0 * index.y / gridSize.y - 1.0;
+
+            // Implement Mandelbrot set
+            float x = 0.0;
+            float y = 0.0;
+            uint iteration = 0;
+            uint max_iteration = 1000;
+            float xtmp = 0.0;
+            while(x * x + y * y <= 4 && iteration < max_iteration)
+            {
+                xtmp = x * x - y * y + x0;
+                y = 2 * x * y + y0;
+                x = xtmp;
+                iteration += 1;
+            }
+
+            // Convert iteration result to colors
+            half color = (0.5 + 0.5 * cos(3.0 + iteration * 0.15));
+            tex.write(half4(color, color, color, 1.0), index, 0);
+        })";
+  NS::Error* pError = nullptr;
+
+  MTL::Library* pComputeLibrary = _pDevice->newLibrary(
+      NS::String::string(kernelSrc, NS::UTF8StringEncoding), nullptr, &pError);
+  if (!pComputeLibrary) {
+    __builtin_printf("%s", pError->localizedDescription()->utf8String());
+    assert(false);
+  }
+
+  MTL::Function* pMandelbrotFn = pComputeLibrary->newFunction(
+      NS::String::string("mandelbrot_set", NS::UTF8StringEncoding));
+  _pComputePSO = _pDevice->newComputePipelineState(pMandelbrotFn, &pError);
+  if (!_pComputePSO) {
+    __builtin_printf("%s", pError->localizedDescription()->utf8String());
+    assert(false);
+  }
+
+  pMandelbrotFn->release();
+  pComputeLibrary->release();
+}
+
 void Renderer::buildDepthStencilStates() {
   MTL::DepthStencilDescriptor* pDsDesc =
       MTL::DepthStencilDescriptor::alloc()->init();
@@ -454,38 +529,18 @@ void Renderer::buildDepthStencilStates() {
 }
 
 void Renderer::buildTextures() {
-  const uint32_t tw = 128;
-  const uint32_t th = 128;
-
   MTL::TextureDescriptor* pTextureDesc =
       MTL::TextureDescriptor::alloc()->init();
-  pTextureDesc->setWidth(tw);
-  pTextureDesc->setHeight(th);
+  pTextureDesc->setWidth(kTextureWidth);
+  pTextureDesc->setHeight(kTextureHeight);
   pTextureDesc->setPixelFormat(MTL::PixelFormatRGBA8Unorm);
   pTextureDesc->setTextureType(MTL::TextureType2D);
   pTextureDesc->setStorageMode(MTL::StorageModeManaged);
-  pTextureDesc->setUsage(MTL::ResourceUsageSample | MTL::ResourceUsageRead);
+  pTextureDesc->setUsage(MTL::ResourceUsageSample | MTL::ResourceUsageRead |
+                         MTL::ResourceUsageWrite);
 
   MTL::Texture* pTexture = _pDevice->newTexture(pTextureDesc);
   _pTexture = pTexture;
-
-  uint8_t* pTextureData = (uint8_t*)alloca(tw * th * 4);
-  for (size_t y = 0; y < th; ++y) {
-    for (size_t x = 0; x < tw; ++x) {
-      bool isWhite = (x ^ y) & 0b1000000;
-      uint8_t c = isWhite ? 0xFF : 0xA;
-
-      size_t i = y * tw + x;
-
-      pTextureData[i * 4 + 0] = c;
-      pTextureData[i * 4 + 1] = c;
-      pTextureData[i * 4 + 2] = c;
-      pTextureData[i * 4 + 3] = 0xFF;
-    }
-  }
-
-  _pTexture->replaceRegion(MTL::Region(0, 0, 0, tw, th, 1), 0, pTextureData,
-                           tw * 4);
 
   pTextureDesc->release();
 }
@@ -569,6 +624,28 @@ void Renderer::buildBuffers() {
     _pCameraDataBuffer[i] =
         _pDevice->newBuffer(cameraDataSize, MTL::ResourceStorageModeManaged);
   }
+}
+
+void Renderer::generateMandelbrotTexture() {
+  MTL::CommandBuffer* pCommandBuffer = _pCommandQueue->commandBuffer();
+  assert(pCommandBuffer);
+
+  MTL::ComputeCommandEncoder* pComputeEncoder =
+      pCommandBuffer->computeCommandEncoder();
+
+  pComputeEncoder->setComputePipelineState(_pComputePSO);
+  pComputeEncoder->setTexture(_pTexture, 0);
+
+  MTL::Size gridSize = MTL::Size(kTextureWidth, kTextureHeight, 1);
+
+  NS::UInteger threadGroupSize = _pComputePSO->maxTotalThreadsPerThreadgroup();
+  MTL::Size threadgroupSize(threadGroupSize, 1, 1);
+
+  pComputeEncoder->dispatchThreads(gridSize, threadgroupSize);
+
+  pComputeEncoder->endEncoding();
+
+  pCommandBuffer->commit();
 }
 
 void Renderer::draw(MTK::View* pView) {
@@ -684,3 +761,5 @@ void Renderer::draw(MTK::View* pView) {
 
   pPool->release();
 }
+
+#pragma endregion Renderer }
