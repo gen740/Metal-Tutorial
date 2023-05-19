@@ -6,6 +6,7 @@
 #define CA_PRIVATE_IMPLEMENTATION
 #include <simd/simd.h>
 #include <time.h>
+#include <hoge.h>
 
 #include <AppKit/AppKit.hpp>
 #include <Metal/Metal.hpp>
@@ -106,15 +107,16 @@ class MyAppDelegate : public NS::ApplicationDelegate {
 };
 
 int main(int argc, char* argv[]) {
-  NS::AutoreleasePool* pAutoreleasePool = NS::AutoreleasePool::alloc()->init();
-
-  MyAppDelegate del;
-
-  NS::Application* pSharedApplication = NS::Application::sharedApplication();
-  pSharedApplication->setDelegate(&del);
-  pSharedApplication->run();
-
-  pAutoreleasePool->release();
+  // NS::AutoreleasePool* pAutoreleasePool = NS::AutoreleasePool::alloc()->init();
+  //
+  // MyAppDelegate del;
+  //
+  // NS::Application* pSharedApplication = NS::Application::sharedApplication();
+  // pSharedApplication->setDelegate(&del);
+  // pSharedApplication->run();
+  //
+  // pAutoreleasePool->release();
+  foo();
 
   return 0;
 }
